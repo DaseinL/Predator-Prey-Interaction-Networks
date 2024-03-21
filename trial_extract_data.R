@@ -22,26 +22,32 @@ cat(paste0("The first ", row_num, " rows and ", ncol(data_clean), " columns have
 # start visualizing a bipartie graph
 if (!requireNamespace("igraph", quietly = TRUE)) install.packages("igraph")
 if (!requireNamespace("ggraph", quietly = TRUE)) install.packages("ggraph")
+if (!requireNamespace("bipartite", quietly = TRUE)) install.packages("bipartite")
 
+library(bipartite)
 library(igraph)
 library(ggraph)
 
 interaction_matrix <- read.csv(csv_name)
 
-edge_list <- which(interaction_matrix > 0, arr.ind = TRUE)
-edges <- data.frame(from = rownames(interaction_matrix)[edge_list[, 1]],
-                    to = colnames(interaction_matrix)[edge_list[, 2]])
+par(xpd=T)
+plotweb(interaction_matrix)
+visweb(interaction_matrix)
 
-g <- graph_from_data_frame(edges, directed = FALSE)
+# edge_list <- which(interaction_matrix > 0, arr.ind = TRUE)
+# edges <- data.frame(from = rownames(interaction_matrix)[edge_list[, 1]],
+#                     to = colnames(interaction_matrix)[edge_list[, 2]])
 
-V(g)$type <- V(g)$name %in% rownames(interaction_matrix)
-V(g)$color <- ifelse(V(g)$type, "skyblue", "lightgreen")
+# g <- graph_from_data_frame(edges, directed = FALSE)
 
-png(bipartie_png_name, width = 1024, height = 768)
-plot(g, layout = layout.bipartite, vertex.label.color = "black", vertex.size = 2,
-     vertex.label.cex = 0.001, edge.arrow.size = 0.5, edge.color = rgb(0, 0, 1, alpha = 0.01),
-     vertex.frame.color = "gray", vertex.label.dist = 1.5)
-dev.off()
+# V(g)$type <- V(g)$name %in% rownames(interaction_matrix)
+# V(g)$color <- ifelse(V(g)$type, "skyblue", "lightgreen")
+
+# png(bipartie_png_name, width = 1024, height = 768)
+# plot(g, layout = layout.bipartite, vertex.label.color = "black", vertex.size = 2,
+#      vertex.label.cex = 0.001, edge.arrow.size = 0.5, edge.color = rgb(0, 0, 1, alpha = 0.01),
+#      vertex.frame.color = "gray", vertex.label.dist = 1.5)
+# dev.off()
 
 # modular analysis
 

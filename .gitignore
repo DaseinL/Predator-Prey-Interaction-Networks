@@ -1,1 +1,4 @@
 .DS_Store
+*.csv
+moth_bee_analysis
+.Rproj.user
