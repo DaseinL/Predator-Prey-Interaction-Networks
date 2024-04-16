@@ -1,26 +1,21 @@
-if (!requireNamespace("BiMat", quietly = TRUE)) install.packages("BiMat")
+# 加载igraph包
+library(igraph)
 
-library(BiMat)
+# 读取CSV文件
+data <- read.csv("./merged_data.csv", header = TRUE, row.names = 1)
 
-# 读取CSV文件。假设文件名为'bipartite_matrix.csv'，
-# 其中行表示虫子，列表示鸟类，每个格子代表在这类鸟的粪便中平均发现的虫的次数。
-bipartite_data <- read.csv("processed_data.csv", row.names = 1)
+# 构建网络
+net <- graph.data.frame(data, directed = FALSE)
 
-# 由于数据已经是加权的，我们直接将其转换为二部网络
-network <- as.bipartite_adjacency_matrix(bipartite_data)
-
-# 创建二部网络对象，注意告知是加权网络
-bp_network <- new_bipartite_network(network, is_weighted = TRUE)
-
-# 运行模块化分析
-modularity_analysis <- compute_modules(bp_network)
-
-# 获取模块结果
-modules <- modularity_analysis$modules
-
-# 打印模块信息
-print(modules)
+# 模块化分析
+mem <- cluster_leading_eigen(net)
+membership <- membership(mem)
 
 # 可视化网络和模块
-plot(modularity_analysis)
-
+V(net)$color <- rainbow(max(membership))[membership]
+V(net)$frame.color <- "white"
+V(net)$size <- 5
+plot(net, vertex.label.cex = 0.7, layout = layout_with_fr)
+legend("bottomleft", legend = unique(membership), pch = 21,
+       col = rainbow(max(membership)), pt.bg = rainbow(max(membership)),
+       pt.cex = 2, bty = "n", ncol = 3)
