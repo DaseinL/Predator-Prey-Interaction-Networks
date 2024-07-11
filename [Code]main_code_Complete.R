@@ -63,7 +63,7 @@ filter_by_RAA <- function(data_pre_RAA){
 
 filter_by_site <- function(pre_data, meta_data, site_name){
   meta_data <- filter(meta_data, Site.Type == site_name)
-  columns_to_select <- intersect(names(pre_data), meta_data$Sample_number)
+  columns_to_select <- intersect(names(pre_data), meta_data$Specimen.Number)
   pro_data <- pre_data[, c("OTU", columns_to_select)]
   return(pro_data)
 }
@@ -127,11 +127,36 @@ statistic_richness <- function(matrix_list, bird_coverage) {
 
 # produce a table containing bird forest coverage rate
 merge_bird_forest_coverage <- function(meta){
-  forest_coverage <- meta %>% 
-    group_by(BirdLife.Name.CORRECT) %>% 
+  # calculate the forest dependency of the first row
+  first_rows <- meta %>%
+    group_by(BirdLife.Name.CORRECT) %>%
+    slice(1) %>%
+    mutate(ForestDependency = Bird.Forest + 0.5 * Bird.Edge - Bird.Agriculture)
+  
+  # calculate average distance
+  forest_coverage <- meta %>%
+    group_by(BirdLife.Name.CORRECT) %>%
     summarise(average.Distance.to.Forest.km = mean(Bird.Distance.to.Forest.km))
-  return(forest_coverage)
+  
+  # get canopy
+  canopy_data <- first_rows %>%
+    select(BirdLife.Name.CORRECT, Bird.Forest.Cover.200m)
+  
+  # get abundance
+  abundance_data <- first_rows %>%
+    select(BirdLife.Name.CORRECT, Bird.Rarity.Score)
+  
+  # merge
+  result <- first_rows %>%
+    select(BirdLife.Name.CORRECT, ForestDependency) %>%
+    left_join(forest_coverage, by = "BirdLife.Name.CORRECT") %>%
+    left_join(canopy_data, by = "BirdLife.Name.CORRECT") %>%
+    left_join(abundance_data, by = "BirdLife.Name.CORRECT")
+  
+  return(result)
 }
+
+
 
 # produce a table containing insect role
 merge_insect_role <- function(meta){
@@ -180,6 +205,11 @@ save_forest_category_bipartite <- function(forest_coverage, insect_rol, web, nam
           method = 'normal',
           #add = TRUE
   )
+
+  title(main = paste("Bipartite Network Plot for", name))
+  # legend("right", legend = c("Forest Birds", "Non-Forest Birds", "Pests", "Other Insects"),
+  #        col = c("#238E23", "darkgoldenrod2", "red", "grey"), pch = 15, cex = 0.8)
+  
   dev.off()
 }
 
@@ -259,16 +289,19 @@ first_col_to_rowname <- function(net){
 
 # function to draw an extinction curve
 extinction_curve <- function(matrix_network, insect_roles, extinction_sequence = NULL) {
+  matrix_network <- matrix_network[rowSums(matrix_network) != 0, colSums(matrix_network) != 0, drop = FALSE]
+  
   if (is.null(extinction_sequence)) {
     extinction_sequence <- sample(colnames(matrix_network))
-    repeat_count <- 1000
+    repeat_count <- 100000
   }else{
     repeat_count <- 1
   }
+  extinction_sequence <- extinction_sequence[extinction_sequence %in% colnames(matrix_network)]
   remaining_pests_list <- rep(0, length(extinction_sequence) + 1)
   
-  # 计算初始剩余害虫数量并保存在列表中
   for (t in 1:repeat_count){
+    print(paste0(t/repeat_count*100, "%"))
     i <- 1
     matrix_network_copy <- matrix_network
     matrix_network_copy <- matrix_network_copy[rowSums(matrix_network_copy) != 0, , drop = FALSE]
@@ -291,39 +324,114 @@ extinction_curve <- function(matrix_network, insect_roles, extinction_sequence =
   return(remaining_pests_list)
 }
 
+
+
+
 # function to visualize the extinction curve of pest control
-save_extinction_curve <- function(pest_list, name, type){
+save_extinction_curve <- function(extinction_data, plot_name) {
   time_stamp <- format(Sys.time(), "%Y-%m-%d_%H-%M-%S")
-  result_df <- data.frame(
-    Step = 0:(length(pest_list) - 1),
-    Remaining_Pests = unlist(pest_list)
-  )
-  p <- ggplot(result_df, aes(x = Step, y = Remaining_Pests)) +
+  
+  # 合并所有灭绝曲线成一个数据框
+  combined_df <- bind_rows(lapply(extinction_data, function(data) {
+    data.frame(
+      Step = 0:(length(data$curve) - 1),
+      Remaining_Pests = data$curve,
+      Sequence = data$name
+    )
+  }))
+  
+  # 找到每个序列的第一个点和最后一个点
+  reference_lines <- combined_df %>%
+    group_by(Sequence) %>%
+    summarize(
+      First_Step = min(Step),
+      Last_Step = max(Step),
+      First_Remaining_Pests = first(Remaining_Pests),
+      Last_Remaining_Pests = last(Remaining_Pests)
+    )
+  
+  # 绘制结果
+  p <- ggplot(combined_df, aes(x = Step, y = Remaining_Pests, color = Sequence)) +
     geom_line() +
     geom_point() +
-    labs(title = paste0("Extinction Curve(Pest Control) in ", name, " Site"), x = "Extinction Step", y = "Pests under control") +
-    theme_minimal()
-  ggsave(paste0("extinction_curve_", type, "_", name, "_", time_stamp, ".jpg"), p)
+    geom_segment(data = reference_lines, 
+                 aes(x = First_Step, xend = Last_Step, 
+                     y = First_Remaining_Pests, yend = Last_Remaining_Pests), 
+                 linetype = "dashed", color = "black") +
+    labs(title = paste0("Extinction Curves (Pest under control) in ", plot_name, " Site"),
+         x = "Extinction Step",
+         y = "Pests under control") +
+    theme_minimal() +
+    scale_color_manual(values = rainbow(length(extinction_data))) +
+    theme(legend.title = element_blank(),
+          legend.position = "right",
+          legend.box.margin = margin(0, 10, 0, 0))
   
+  # 设置图形的宽度和高度，扩展图形的画布
+  ggsave(paste0("extinction_curves_", plot_name, "_", time_stamp, ".jpg"), p,
+         width = 7.5, height = 5, units = "in")
 }
+
+
+save_extinction_curve_by_metric <- function(extinction_data, plot_name){
+  time_stamp <- format(Sys.time(), "%Y-%m-%d_%H-%M-%S")
+  
+  normalize <- function(x) {
+    return ((x - min(x)) / (max(x) - min(x)))
+  }
+  
+  process_data <- function(data, name) {
+    data <- unlist(data)
+    df <- data.frame(
+      Step = 0:(length(data) - 1),
+      Remaining_Pests = data,
+      Name = name
+    )
+    df$Step <- normalize(df$Step)
+    df$Remaining_Pests <- normalize(df$Remaining_Pests)
+    return(df)
+  }
+  
+  combined_df <- do.call(rbind, lapply(names(extinction_data), function(name) {
+    process_data(extinction_data[[name]], name)
+  }))
+  
+  colors <- c("Agriculture" = "darkgoldenrod2", 
+              "Forest Interior" = "#238E23", 
+              "Forest Edge" = "#91A724", 
+              "Total" = "black")
+  p <- ggplot(combined_df, aes(x = Step, y = Remaining_Pests, color = Name)) +
+    geom_line(linewidth = 1) +
+    annotate("segment", x = 0, xend = 1, y = 1, yend = 0, color = "grey", linetype = "dashed") +
+    labs(title = paste0("Extinction Curves (Pest under control) in ", plot_name),
+         x = "Extinction Step",
+         y = "Pests under control") +
+    theme_minimal() +
+    scale_color_manual(values = colors) +
+    theme(legend.title = element_blank(),
+          legend.position = "right",
+          legend.box.margin = margin(0, 10, 0, 0))
+  ggsave(paste0("extinction_curves_", plot_name, "_", time_stamp, ".jpg"), p,
+         width = 7.5, height = 5, units = "in")
+}
+
 
 
 
 ### Start data processing
 # load data
 data <- read.csv("./009MRes Denian Li Project/Complete Diet Data/fwh_consensus.csv")
-bird_meta <- read.csv("./009MRes Denian Li Project/Complete Diet Data/Ghana_Mistnetting_wrangled_14052024.csv")
+bird_meta <- read.csv("./009MRes Denian Li Project/Complete Diet Data/Ghana_Mistnetting_wrangled_19062024.csv")
 insect_meta <- read.csv("./009MRes Denian Li Project/Data/Pest_annotation_Ghana_060223_cleaned.csv")
-bird_meta_update <- read_excel("./009MRes Denian Li Project/Data/sample_BF_dist_cover_allcounts.xlsx", sheet="sample_BF_dist_cover_allcounts")
 
 # Filter the data to keep only arthropods exclude arachnids which are mites and therefore not dietary items
 data_filtered <- filter_by_species(data)
 data_RAA <- filter_by_RAA(data_filtered) # RAA filter to eliminate bias from small data by threshold of 0.3%
 
 # site_type <- c("Forest Interior", "Forest Edge", "Agriculture")
-data_RAA_forest <- filter_by_site(data_RAA, bird_meta_update, "Forest Interior")
-data_RAA_edge <- filter_by_site(data_RAA, bird_meta_update, "Forest Edge")
-data_RAA_agriculture <- filter_by_site(data_RAA, bird_meta_update, "Agriculture")
+data_RAA_forest <- filter_by_site(data_RAA, bird_meta, "Forest Interior")
+data_RAA_edge <- filter_by_site(data_RAA, bird_meta, "Forest Edge")
+data_RAA_agriculture <- filter_by_site(data_RAA, bird_meta, "Agriculture")
 
 # Merge bird forest coverage metadata and insect role metadata
 bird_forest_coverage <- merge_bird_forest_coverage(bird_meta) %>%
@@ -338,6 +446,8 @@ data_in_site_type <- list(
   "Forest Edge" = combine_data(bird_meta, data_RAA_edge, data), 
   "Agriculture" = combine_data(bird_meta, data_RAA_agriculture, data)
   )
+results_list <- list()
+
 
 # Main loop for data in different site type
 for(name in names(data_in_site_type)){
@@ -347,55 +457,83 @@ for(name in names(data_in_site_type)){
   data_merged_reordered <- cbind(Insect_species=data_merged[["Insect_species"]], data_merged_reordered)
   bird_insect_web <- data_merged_reordered %>% column_to_rownames(var = 'Insect_species')
   
-  # Visualize bipartite plot
-  save_forest_category_bipartite(bird_forest_coverage, insect_role, bird_insect_web, name)
+  # # Visualize bipartite plot
+  # save_forest_category_bipartite(bird_forest_coverage, insect_role, bird_insect_web, name)
+  # 
+  # # Visualize proportion bar chart
+  # forest_birds <- bird_forest_coverage %>%
+  #   filter(average.Distance.to.Forest.km <= 0) %>%
+  #   pull(BirdLife.Name.CORRECT) %>%
+  #   intersect(colnames(bird_insect_web))
+  # 
+  # non_forest_birds <- bird_forest_coverage %>%
+  #   filter(average.Distance.to.Forest.km > 0) %>%
+  #   pull(BirdLife.Name.CORRECT) %>%
+  #   intersect(colnames(bird_insect_web))
+  # 
+  # role_groups <- split(insect_role, insect_role$Role)
+  # bird_insect_web_by_role <- list()
+  # for(role in names(role_groups)) {
+  #   species_in_role <- role_groups[[role]]$Species
+  #   bird_insect_web_by_role[[role]] <- bird_insect_web %>%
+  #     filter(row.names(.) %in% species_in_role)
+  # }
+  # 
+  # static_data <- cbind(
+  #   c("Pest", "Non-pest", "Natural enemy", "Vector of animal disease"),
+  #   rbind(count_nonzero(bird_insect_web_by_role$Pest, forest_birds, non_forest_birds),
+  #         count_nonzero(bird_insect_web_by_role$`Non-pest`, forest_birds, non_forest_birds),
+  #         count_nonzero(bird_insect_web_by_role$`Natural enemy`, forest_birds, non_forest_birds),
+  #         count_nonzero(bird_insect_web_by_role$`Vector of animal disease`, forest_birds, non_forest_birds)))
+  # 
+  # colnames(static_data) <- c("Insect Role", "Forest birds only", "Shared", "Non-forest birds only")
+  # static_df <- as.data.frame(static_data)
+  # static_df[, -1] <- lapply(static_df[, -1], as.numeric)
+  # df_percentages <- static_df %>%
+  #   mutate(across(-`Insect Role`, ~ . / rowSums(static_df[, -1]))) %>%
+  #   mutate(`Insect Role` = factor(`Insect Role`, levels = rev(`Insect Role`)))
+  # df_plot <- melt(df_percentages, id.vars = "Insect Role", variable.name = "Bird Type",
+  #                 value.name = "proportion")
+  # 
+  # save_bar_chart_insect_role(df_plot, name)
+  # 
+  # # Save the node and edge data for Gephi
+  # nodes_o <- paste0("nodes_", gsub(" ", "_", name), ".csv")
+  # edges_o <- paste0("edges_", gsub(" ", "_", name), ".csv")
+  # convert_data_for_gephi(data_merged, bird_forest_coverage, nodes_o, edges_o)
+
+  # # Visualize the extinction curve
+  # # Visualize the extinction curve
+  # result_1 <- extinction_curve(bird_insect_web, insect_role)
+  # forest_dependence_frequency <- bird_forest_coverage %>% arrange(desc(ForestDependency)) %>% pull(BirdLife.Name.CORRECT)
+  # result_2 <- extinction_curve(bird_insect_web, insect_role, forest_dependence_frequency)
+  # forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
+  # result_3 <- extinction_curve(bird_insect_web, insect_role, )
+  # forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
+  # result_4 <- extinction_curve(bird_insect_web, insect_role, )
+  # 
+  # extinction_data <- list(
+  #   list(curve = result_1, name = "Average Random(1000 repeats)"),
+  #   list(curve = result_2, name = "Forest Dependence(Frequency)"),
+  #   list(curve = result_3, name = "Forest Dependence(Distance)"),
+  #   list(curve = result_4, name = "Forest Dependence(Canopy)"),
+  #   list(curve = result_4, name = "Forest Dependence(Canopy)")
+  # )
+  # save_extinction_curve(extinction_data, name)
   
-  # Visualize proportion bar chart
-  forest_birds <- bird_forest_coverage %>%
-    filter(average.Distance.to.Forest.km <= 0) %>%
-    pull(BirdLife.Name.CORRECT) %>%
-    intersect(colnames(bird_insect_web))
-  
-  non_forest_birds <- bird_forest_coverage %>%
-    filter(average.Distance.to.Forest.km > 0) %>%
-    pull(BirdLife.Name.CORRECT) %>%
-    intersect(colnames(bird_insect_web))
-  
-  role_groups <- split(insect_role, insect_role$Role)
-  bird_insect_web_by_role <- list()
-  for(role in names(role_groups)) {
-    species_in_role <- role_groups[[role]]$Species
-    bird_insect_web_by_role[[role]] <- bird_insect_web %>% 
-      filter(row.names(.) %in% species_in_role)
-  }
-  
-  static_data <- cbind(
-    c("Pest", "Non-pest", "Natural enemy", "Vector of animal disease"),
-    rbind(count_nonzero(bird_insect_web_by_role$Pest, forest_birds, non_forest_birds),
-          count_nonzero(bird_insect_web_by_role$`Non-pest`, forest_birds, non_forest_birds),
-          count_nonzero(bird_insect_web_by_role$`Natural enemy`, forest_birds, non_forest_birds),
-          count_nonzero(bird_insect_web_by_role$`Vector of animal disease`, forest_birds, non_forest_birds)))
-  
-  colnames(static_data) <- c("Insect Role", "Forest birds only", "Shared", "Non-forest birds only")
-  static_df <- as.data.frame(static_data)
-  static_df[, -1] <- lapply(static_df[, -1], as.numeric)
-  df_percentages <- static_df %>%
-    mutate(across(-`Insect Role`, ~ . / rowSums(static_df[, -1]))) %>%
-    mutate(`Insect Role` = factor(`Insect Role`, levels = rev(`Insect Role`)))
-  df_plot <- melt(df_percentages, id.vars = "Insect Role", variable.name = "Bird Type",
-                  value.name = "proportion")
-  
-  save_bar_chart_insect_role(df_plot, name)
-  
-  # Save the node and edge data for Gephi
-  nodes_o <- paste0("nodes_", gsub(" ", "_", name), ".csv")
-  edges_o <- paste0("edges_", gsub(" ", "_", name), ".csv")
-  convert_data_for_gephi(data_merged, bird_forest_coverage, nodes_o, edges_o)
-  
-  # Visualize the extinction curve
-  result <- extinction_curve(bird_insect_web, insect_role)
-  save_extinction_curve(result, name, "Random")
+  results_list[["random"]][[name]] <- extinction_curve(bird_insect_web, insect_role)
+  abundance <- bird_forest_coverage %>% arrange(desc(Bird.Rarity.Score)) %>% pull(BirdLife.Name.CORRECT)
+  results_list[["abundance"]][[name]] <- extinction_curve(bird_insect_web, insect_role, abundance)
+  forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
+  results_list[["distance_to_forest"]][[name]] <- extinction_curve(bird_insect_web, insect_role, forest_dependence_distance)
+  forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
+  results_list[["forest_canopy"]][[name]] <- extinction_curve(bird_insect_web, insect_role, forest_dependence_canopy)
 }
+
+for(curve in names(results_list)){
+  save_extinction_curve_by_metric(results_list[[curve]], gsub("_", " ", curve))
+}
+
 
 
 stop()
@@ -507,7 +645,7 @@ statistic_abundance <- function(matrix_list, bird_coverage) {
   return(list(mean = results_mean, se = results_se))
 }
 
-results <- statistic_abundance(data_individual_in_site_type, bird_meta_update)
+results <- statistic_abundance(data_individual_in_site_type, bird_meta)
 
 # 打印结果
 print(results$mean)
@@ -523,7 +661,7 @@ data_stat <- data.frame(
 p <- ggplot(data_stat, aes(x = Site, y = Metrics, color = Bird, group = Bird)) +
   geom_point(size = 4, position = position_dodge(0.5)) +
   geom_errorbar(aes(ymin = Metrics - SE, ymax = Metrics + SE), 
-                width = 0.2, 
+                width = 0.2,                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
                 position = position_dodge(0.5), 
                 linewidth = 1) +
   geom_vline(xintercept = 1.5, linetype = "dashed", color = "gray") +
@@ -689,21 +827,21 @@ for(metric in metrics){
   }
 }
 
-# 创建灭绝曲线
-# 将第一列作为行名
-web <- data_in_site_type[[2]]
-
-# 移除第一列
-web <- web[, -1]
-
-# 确保数据为数值型矩阵
-web <- as.matrix(web)
-extinction_results <- second.extinct(web, participant = "higher", method = "random")
-
-# 绘制灭绝曲线
-plot(extinction_results, main = "Bird-Insect Bipartite Network Extinction Curve",
-     xlab = "Proportion of Birds Removed", ylab = "Proportion of Insects Remaining")
-
+# # 创建灭绝曲线
+# # 将第一列作为行名
+# web <- data_in_site_type[[2]]
+# 
+# # 移除第一列
+# web <- web[, -1]
+# 
+# # 确保数据为数值型矩阵
+# web <- as.matrix(web)
+# extinction_results <- second.extinct(web, participant = "higher", method = "random")
+# 
+# # 绘制灭绝曲线
+# plot(extinction_results, main = "Bird-Insect Bipartite Network Extinction Curve",
+#      xlab = "Proportion of Birds Removed", ylab = "Proportion of Insects Remaining")
+# 
 
 
 
