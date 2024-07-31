@@ -97,6 +97,7 @@ combine_data <- function(bird_meta, data_RAA, data) {
   return(data_merged)
 }
 
+
 # Visualize bird community capture patterns across site types
 statistic_richness <- function(matrix_list, bird_coverage) {
   results <- list()
@@ -156,13 +157,68 @@ merge_bird_forest_coverage <- function(meta){
   return(result)
 }
 
-
+# Calculate Robustness of pest annotation
+calculate_robustness <- function(df, role_col = "Role", target_cols = c("Is the genus a plant pest?", "Known pest?", "Agricultural pest in SSA?", "Pest in Ghana?"), robustness_col = "Robustness") {
+  for (i in 1:nrow(df)) {
+    # Update Role column based on specific conditions
+    if (df[i, role_col] == "Disease vector") {
+      df[i, role_col] <- "Vector of animal disease"
+    } else if (df[i, role_col] == "Forestry pest") {
+      df[i, role_col] <- "Pest"
+    } else if (df[i, role_col] == "Natual enemy") {
+      df[i, role_col] <- "Natural enemy"
+    } else if (df[i, role_col] == "Disease Vector") {
+      df[i, role_col] <- "Vector of animal disease"
+    } else if (df[i, role_col] == "Unknown") {
+      df[i, role_col] <- "Non-pest"
+    } 
+    
+    # Skip the row if Robustness column already has a value
+    # if (!is.na(df[i, robustness_col])) next
+    
+    # Update Robustness column if Role is "Pest"
+    # if (df[i, role_col] == "Pest") {
+    #   yes_count <- sum(df[i, target_cols] == "yes", na.rm = TRUE)
+    #   df[i, robustness_col] <- ifelse(yes_count > 0, yes_count, 1)
+    # }
+  }
+  
+  df_extracted <- df %>%
+    select(Species = species.corrected, Role, Robustness)
+  
+  return(df_extracted)
+}
 
 # produce a table containing insect role
-merge_insect_role <- function(meta){
-  role <- meta[, c("Species", "Role")] %>%
-    filter(if_all(everything(), ~ !is.na(.) & . != "Unknown" & . != ""))
+merge_insect_role <- function(meta) {
+  # discard bold annotation
+  meta$Species <- gsub("sp.*", "sp.", meta$Species)
+  role <- meta %>%
+    filter(!is.na(Species) & Species != "" & !is.na(Role) & Role != "Unknown" & Role != "") %>%
+    select(Species, Role, Robustness)
+  # discard copy species in order
+  role_priority <- c("Pest", "Natural enemy", "Vector of animal disease", "Vector of plant disease", "Non-pest")
+  role <- role %>%
+    mutate(Role = factor(Role, levels = role_priority)) %>%
+    group_by(Species) %>%
+    summarise(Role = first(sort(Role, na.last = TRUE)),
+              Robustness = first(Robustness)) %>%
+    ungroup()
+  role$Role <- as.character(role$Role)
   return(role)
+}
+
+update_insect_data <- function(df1, df2) {
+  role_priority <- c("Pest", "Natural enemy", "Vector of animal disease", "Vector of plant disease", "Non-pest")
+  combined_df <- bind_rows(df1, df2)
+  processed_df <- combined_df %>%
+    mutate(Role = factor(Role, levels = role_priority)) %>%
+    arrange(Species, Role) %>%
+    group_by(Species) %>%
+    slice_min(order_by = Role, with_ties = FALSE) %>%
+    ungroup()
+  processed_df$Role <- as.character(processed_df$Role)
+  return(processed_df)
 }
 
 
@@ -293,7 +349,7 @@ extinction_curve <- function(matrix_network, insect_roles, extinction_sequence =
   
   if (is.null(extinction_sequence)) {
     extinction_sequence <- sample(colnames(matrix_network))
-    repeat_count <- 100000
+    repeat_count <- 10
   }else{
     repeat_count <- 1
   }
@@ -423,6 +479,7 @@ save_extinction_curve_by_metric <- function(extinction_data, plot_name){
 data <- read.csv("./009MRes Denian Li Project/Complete Diet Data/fwh_consensus.csv")
 bird_meta <- read.csv("./009MRes Denian Li Project/Complete Diet Data/Ghana_Mistnetting_wrangled_19062024.csv")
 insect_meta <- read.csv("./009MRes Denian Li Project/Data/Pest_annotation_Ghana_060223_cleaned.csv")
+insect_supply <- read_excel("./009MRes Denian Li Project/Pest annotation 22072024.xlsx", sheet="pest annotation")
 
 # Filter the data to keep only arthropods exclude arachnids which are mites and therefore not dietary items
 data_filtered <- filter_by_species(data)
@@ -437,7 +494,9 @@ data_RAA_agriculture <- filter_by_site(data_RAA, bird_meta, "Agriculture")
 bird_forest_coverage <- merge_bird_forest_coverage(bird_meta) %>%
   mutate(Bird.Type = ifelse(average.Distance.to.Forest.km <= 0, "Forest bird", "Non-Forest bird"))
 bird_forest_coverage <- bird_forest_coverage[order(bird_forest_coverage$average.Distance.to.Forest.km), ]
-insect_role <- merge_insect_role(insect_meta)
+insect_role_all <- update_insect_data(merge_insect_role(insect_meta), calculate_robustness(insect_supply))
+insect_role_confirmed <- insect_role_all %>%
+  mutate(Role = ifelse(!is.na(Robustness) & Robustness != 4, "Non-pest", Role))
 
 # Combine metadata with the filtered data
 data_in_site_type <- list(
@@ -450,89 +509,111 @@ results_list <- list()
 
 
 # Main loop for data in different site type
-for(name in names(data_in_site_type)){
-  data_merged <- data_in_site_type[[name]]
-  valid_columns <- bird_forest_coverage$BirdLife.Name.CORRECT %in% colnames(data_merged)
-  data_merged_reordered <- data_merged[, bird_forest_coverage$BirdLife.Name.CORRECT[valid_columns]]
-  data_merged_reordered <- cbind(Insect_species=data_merged[["Insect_species"]], data_merged_reordered)
-  bird_insect_web <- data_merged_reordered %>% column_to_rownames(var = 'Insect_species')
-  
-  # # Visualize bipartite plot
-  # save_forest_category_bipartite(bird_forest_coverage, insect_role, bird_insect_web, name)
-  # 
-  # # Visualize proportion bar chart
-  # forest_birds <- bird_forest_coverage %>%
-  #   filter(average.Distance.to.Forest.km <= 0) %>%
-  #   pull(BirdLife.Name.CORRECT) %>%
-  #   intersect(colnames(bird_insect_web))
-  # 
-  # non_forest_birds <- bird_forest_coverage %>%
-  #   filter(average.Distance.to.Forest.km > 0) %>%
-  #   pull(BirdLife.Name.CORRECT) %>%
-  #   intersect(colnames(bird_insect_web))
-  # 
-  # role_groups <- split(insect_role, insect_role$Role)
-  # bird_insect_web_by_role <- list()
-  # for(role in names(role_groups)) {
-  #   species_in_role <- role_groups[[role]]$Species
-  #   bird_insect_web_by_role[[role]] <- bird_insect_web %>%
-  #     filter(row.names(.) %in% species_in_role)
-  # }
-  # 
-  # static_data <- cbind(
-  #   c("Pest", "Non-pest", "Natural enemy", "Vector of animal disease"),
-  #   rbind(count_nonzero(bird_insect_web_by_role$Pest, forest_birds, non_forest_birds),
-  #         count_nonzero(bird_insect_web_by_role$`Non-pest`, forest_birds, non_forest_birds),
-  #         count_nonzero(bird_insect_web_by_role$`Natural enemy`, forest_birds, non_forest_birds),
-  #         count_nonzero(bird_insect_web_by_role$`Vector of animal disease`, forest_birds, non_forest_birds)))
-  # 
-  # colnames(static_data) <- c("Insect Role", "Forest birds only", "Shared", "Non-forest birds only")
-  # static_df <- as.data.frame(static_data)
-  # static_df[, -1] <- lapply(static_df[, -1], as.numeric)
-  # df_percentages <- static_df %>%
-  #   mutate(across(-`Insect Role`, ~ . / rowSums(static_df[, -1]))) %>%
-  #   mutate(`Insect Role` = factor(`Insect Role`, levels = rev(`Insect Role`)))
-  # df_plot <- melt(df_percentages, id.vars = "Insect Role", variable.name = "Bird Type",
-  #                 value.name = "proportion")
-  # 
-  # save_bar_chart_insect_role(df_plot, name)
-  # 
-  # # Save the node and edge data for Gephi
-  # nodes_o <- paste0("nodes_", gsub(" ", "_", name), ".csv")
-  # edges_o <- paste0("edges_", gsub(" ", "_", name), ".csv")
-  # convert_data_for_gephi(data_merged, bird_forest_coverage, nodes_o, edges_o)
-
-  # # Visualize the extinction curve
-  # # Visualize the extinction curve
-  # result_1 <- extinction_curve(bird_insect_web, insect_role)
-  # forest_dependence_frequency <- bird_forest_coverage %>% arrange(desc(ForestDependency)) %>% pull(BirdLife.Name.CORRECT)
-  # result_2 <- extinction_curve(bird_insect_web, insect_role, forest_dependence_frequency)
-  # forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
-  # result_3 <- extinction_curve(bird_insect_web, insect_role, )
-  # forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
-  # result_4 <- extinction_curve(bird_insect_web, insect_role, )
-  # 
-  # extinction_data <- list(
-  #   list(curve = result_1, name = "Average Random(1000 repeats)"),
-  #   list(curve = result_2, name = "Forest Dependence(Frequency)"),
-  #   list(curve = result_3, name = "Forest Dependence(Distance)"),
-  #   list(curve = result_4, name = "Forest Dependence(Canopy)"),
-  #   list(curve = result_4, name = "Forest Dependence(Canopy)")
-  # )
-  # save_extinction_curve(extinction_data, name)
-  
-  results_list[["random"]][[name]] <- extinction_curve(bird_insect_web, insect_role)
-  abundance <- bird_forest_coverage %>% arrange(desc(Bird.Rarity.Score)) %>% pull(BirdLife.Name.CORRECT)
-  results_list[["abundance"]][[name]] <- extinction_curve(bird_insect_web, insect_role, abundance)
-  forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
-  results_list[["distance_to_forest"]][[name]] <- extinction_curve(bird_insect_web, insect_role, forest_dependence_distance)
-  forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
-  results_list[["forest_canopy"]][[name]] <- extinction_curve(bird_insect_web, insect_role, forest_dependence_canopy)
+for(insect_role in list(insect_role_all, insect_role_confirmed)){
+  for(name in names(data_in_site_type)){
+    data_merged <- data_in_site_type[[name]]
+    valid_columns <- bird_forest_coverage$BirdLife.Name.CORRECT %in% colnames(data_merged)
+    data_merged_reordered <- data_merged[, bird_forest_coverage$BirdLife.Name.CORRECT[valid_columns]]
+    data_merged_reordered <- cbind(Insect_species=data_merged[["Insect_species"]], data_merged_reordered)
+    bird_insect_web <- data_merged_reordered %>% column_to_rownames(var = 'Insect_species')
+    
+    # # Visualize bipartite plot
+    # save_forest_category_bipartite(bird_forest_coverage, insect_role, bird_insect_web, name)
+    # 
+    # # Visualize proportion bar chart
+    # forest_birds <- bird_forest_coverage %>%
+    #   filter(average.Distance.to.Forest.km <= 0) %>%
+    #   pull(BirdLife.Name.CORRECT) %>%
+    #   intersect(colnames(bird_insect_web))
+    # 
+    # non_forest_birds <- bird_forest_coverage %>%
+    #   filter(average.Distance.to.Forest.km > 0) %>%
+    #   pull(BirdLife.Name.CORRECT) %>%
+    #   intersect(colnames(bird_insect_web))
+    # 
+    # role_groups <- split(insect_role, insect_role$Role)
+    # bird_insect_web_by_role <- list()
+    # for(role in names(role_groups)) {
+    #   species_in_role <- role_groups[[role]]$Species
+    #   bird_insect_web_by_role[[role]] <- bird_insect_web %>%
+    #     filter(row.names(.) %in% species_in_role)
+    # }
+    # 
+    # static_data <- cbind(
+    #   c("Pest", "Non-pest", "Natural enemy", "Vector of animal disease"),
+    #   rbind(count_nonzero(bird_insect_web_by_role$Pest, forest_birds, non_forest_birds),
+    #         count_nonzero(bird_insect_web_by_role$`Non-pest`, forest_birds, non_forest_birds),
+    #         count_nonzero(bird_insect_web_by_role$`Natural enemy`, forest_birds, non_forest_birds),
+    #         count_nonzero(bird_insect_web_by_role$`Vector of animal disease`, forest_birds, non_forest_birds)))
+    # 
+    # colnames(static_data) <- c("Insect Role", "Forest birds only", "Shared", "Non-forest birds only")
+    # static_df <- as.data.frame(static_data)
+    # static_df[, -1] <- lapply(static_df[, -1], as.numeric)
+    # df_percentages <- static_df %>%
+    #   mutate(across(-`Insect Role`, ~ . / rowSums(static_df[, -1]))) %>%
+    #   mutate(`Insect Role` = factor(`Insect Role`, levels = rev(`Insect Role`)))
+    # df_plot <- melt(df_percentages, id.vars = "Insect Role", variable.name = "Bird Type",
+    #                 value.name = "proportion")
+    # 
+    # save_bar_chart_insect_role(df_plot, name)
+    # 
+    # # Save the node and edge data for Gephi
+    # nodes_o <- paste0("nodes_", gsub(" ", "_", name), ".csv")
+    # edges_o <- paste0("edges_", gsub(" ", "_", name), ".csv")
+    # convert_data_for_gephi(data_merged, bird_forest_coverage, nodes_o, edges_o)
+    
+    # # Visualize the extinction curve in different metrics
+    # result_1 <- extinction_curve(bird_insect_web, insect_role)
+    # forest_dependence_frequency <- bird_forest_coverage %>% arrange(desc(ForestDependency)) %>% pull(BirdLife.Name.CORRECT)
+    # result_2 <- extinction_curve(bird_insect_web, insect_role, forest_dependence_frequency)
+    # forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
+    # result_3 <- extinction_curve(bird_insect_web, insect_role, )
+    # forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
+    # result_4 <- extinction_curve(bird_insect_web, insect_role, )
+    # 
+    # extinction_data <- list(
+    #   list(curve = result_1, name = "Average Random(1000 repeats)"),
+    #   list(curve = result_2, name = "Forest Dependence(Frequency)"),
+    #   list(curve = result_3, name = "Forest Dependence(Distance)"),
+    #   list(curve = result_4, name = "Forest Dependence(Canopy)"),
+    #   list(curve = result_4, name = "Forest Dependence(Canopy)")
+    # )
+    # save_extinction_curve(extinction_data, name)
+    
+    # Visualize the extinction curve in different site type
+    results_list[["random"]][[name]] <- extinction_curve(bird_insect_web, insect_role)
+    abundance <- bird_forest_coverage %>% arrange(Bird.Rarity.Score) %>% pull(BirdLife.Name.CORRECT)
+    results_list[["abundance"]][[name]] <- extinction_curve(bird_insect_web, insect_role, abundance)
+    forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
+    results_list[["distance_to_forest"]][[name]] <- extinction_curve(bird_insect_web, insect_role, forest_dependence_distance)
+    forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
+    results_list[["forest_canopy"]][[name]] <- extinction_curve(bird_insect_web, insect_role, forest_dependence_canopy)
+  }
+  for(curve in names(results_list)){
+    # save_extinction_curve_by_metric(results_list[[curve]], gsub("_", " ", curve))
+    for(sites in names(results_list[[curve]])){
+      print(paste(curve, sites))
+      normalize <- function(x) {
+        return ((x - min(x)) / (max(x) - min(x)))
+      }
+      normalized_sequence <- normalize(results_list[[curve]][[sites]])
+      # print(normalized_sequence)
+      stability_pest_cotrol_sum <- sum(normalized_sequence)/length(results_list[[curve]][[sites]])
+      print(stability_pest_cotrol_sum)
+      half_life_proportion <- which(normalized_sequence < 0.5)[1] / length(normalized_sequence) # half-life stability
+      print(paste0(half_life_proportion*100))
+    }
+  }
 }
 
-for(curve in names(results_list)){
-  save_extinction_curve_by_metric(results_list[[curve]], gsub("_", " ", curve))
-}
+
+
+
+
+
+
+
+
 
 
 
