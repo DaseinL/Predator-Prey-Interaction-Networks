@@ -986,127 +986,140 @@ for(insect_role in list(insect_role_all)){
     bird_insect_web <- bird_insect_web_weight
     bird_insect_web[bird_insect_web != 0] <- 1
     
-    # calculate the network feature
-    basic_analysis <- calculate_bird_feature(name, bird_insect_web, bird_insect_web_weight, insect_role)
-    species_result[[name]] <- basic_analysis$bird_metrics # used for draw
-    network_feature <- basic_analysis$network_metrics
-    basic_network_analysis <- rbind(basic_network_analysis, as.data.frame(t(network_feature), stringsAsFactors = FALSE))
+    # 将数据框转换为长格式
+    data_long <- melt(bird_insect_web, varnames = c("Insect", "Bird"), value.name = "value")
     
-    # # statistics pest distribution
-    # pest_species <- insect_role$Species[insect_role$Role == "Pest"]
-    # pest_distribution[[length(pest_distribution) + 1]] <- sum(pest_species %in% rownames(bird_insect_web))
-
-    # Visualize bipartite plot
-    save_forest_category_bipartite(bird_forest_coverage, insect_role, bird_insect_web, name)
-
-    # Visualize proportion bar chart
-    forest_birds <- bird_forest_coverage %>%
-      filter(average.Distance.to.Forest.km <= 0) %>%
-      pull(BirdLife.Name.CORRECT) %>%
-      intersect(colnames(bird_insect_web))
-
-    non_forest_birds <- bird_forest_coverage %>%
-      filter(average.Distance.to.Forest.km > 0) %>%
-      pull(BirdLife.Name.CORRECT) %>%
-      intersect(colnames(bird_insect_web))
-
-    role_groups <- split(insect_role, insect_role$Role)
-    bird_insect_web_by_role <- list()
-    for(role in names(role_groups)) {
-      species_in_role <- role_groups[[role]]$Species
-      bird_insect_web_by_role[[role]] <- bird_insect_web %>%
-        filter(row.names(.) %in% species_in_role)
-    }
+    # 去除值为0的行
+    data_long <- data_long[data_long$value > 0, ]
     
-  
-    # Plot the proportion of only pest and non-pest
-    static_data <- cbind(
-      c("Pest", "Non-pest"),
-      rbind(count_nonzero(bird_insect_web_by_role$Pest, forest_birds, non_forest_birds),
-            count_nonzero(bird_insect_web_by_role$`Non-pest`, forest_birds, non_forest_birds)))
-    colnames(static_data) <- c("Insect Role", "Forest birds only", "Shared", "Non-forest birds only")
-    static_df <- as.data.frame(static_data)
-    static_df[, -1] <- lapply(static_df[, -1], as.numeric)
-    df_percentages <- static_df %>%
-      mutate(across(-`Insect Role`, ~ . / rowSums(static_df[, -1]))) %>%
-      mutate(`Insect Role` = factor(`Insect Role`, levels = rev(`Insect Role`)))
-    df_plot <- melt(df_percentages, id.vars = "Insect Role", variable.name = "Bird Type",
-                    value.name = "proportion")
-    save_bar_chart_insect_role(df_plot, name)
-
-    # # Save the node and edge data for Gephi
-    # nodes_o <- paste0("nodes_", gsub(" ", "_", name), ".csv")
-    # edges_o <- paste0("edges_", gsub(" ", "_", name), ".csv")
-    # convert_data_for_gephi(data_merged, bird_forest_coverage, nodes_o, edges_o)
-
-    # Visualize the extinction curve in different site type
-    repeat_time <- 10000
-    results_list[["random"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, )
-    abundance <- bird_forest_coverage %>% arrange(Bird.Rarity.Score) %>% pull(BirdLife.Name.CORRECT)
-    results_list[["abundance"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, abundance)
-    forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
-    results_list[["distance_to_forest"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, forest_dependence_distance)
-    forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
-    results_list[["forest_canopy"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, forest_dependence_canopy)
+    # 重命名列名，符合所需格式
+    colnames(data_long) <- c("to", "from", "value")
+    
+    # 查看结果
+    print(data_long)
+    
+    stop()
+    
+    # # calculate the network feature
+    # basic_analysis <- calculate_bird_feature(name, bird_insect_web, bird_insect_web_weight, insect_role)
+    # species_result[[name]] <- basic_analysis$bird_metrics # used for draw
+    # network_feature <- basic_analysis$network_metrics
+    # basic_network_analysis <- rbind(basic_network_analysis, as.data.frame(t(network_feature), stringsAsFactors = FALSE))
+    # 
+    # # # statistics pest distribution
+    # # pest_species <- insect_role$Species[insect_role$Role == "Pest"]
+    # # pest_distribution[[length(pest_distribution) + 1]] <- sum(pest_species %in% rownames(bird_insect_web))
+    # 
+    # # Visualize bipartite plot
+    # save_forest_category_bipartite(bird_forest_coverage, insect_role, bird_insect_web, name)
+    # 
+    # # Visualize proportion bar chart
+    # forest_birds <- bird_forest_coverage %>%
+    #   filter(average.Distance.to.Forest.km <= 0) %>%
+    #   pull(BirdLife.Name.CORRECT) %>%
+    #   intersect(colnames(bird_insect_web))
+    # 
+    # non_forest_birds <- bird_forest_coverage %>%
+    #   filter(average.Distance.to.Forest.km > 0) %>%
+    #   pull(BirdLife.Name.CORRECT) %>%
+    #   intersect(colnames(bird_insect_web))
+    # 
+    # role_groups <- split(insect_role, insect_role$Role)
+    # bird_insect_web_by_role <- list()
+    # for(role in names(role_groups)) {
+    #   species_in_role <- role_groups[[role]]$Species
+    #   bird_insect_web_by_role[[role]] <- bird_insect_web %>%
+    #     filter(row.names(.) %in% species_in_role)
+    # }
+    # 
+    # 
+    # # Plot the proportion of only pest and non-pest
+    # static_data <- cbind(
+    #   c("Pest", "Non-pest"),
+    #   rbind(count_nonzero(bird_insect_web_by_role$Pest, forest_birds, non_forest_birds),
+    #         count_nonzero(bird_insect_web_by_role$`Non-pest`, forest_birds, non_forest_birds)))
+    # colnames(static_data) <- c("Insect Role", "Forest birds only", "Shared", "Non-forest birds only")
+    # static_df <- as.data.frame(static_data)
+    # static_df[, -1] <- lapply(static_df[, -1], as.numeric)
+    # df_percentages <- static_df %>%
+    #   mutate(across(-`Insect Role`, ~ . / rowSums(static_df[, -1]))) %>%
+    #   mutate(`Insect Role` = factor(`Insect Role`, levels = rev(`Insect Role`)))
+    # df_plot <- melt(df_percentages, id.vars = "Insect Role", variable.name = "Bird Type",
+    #                 value.name = "proportion")
+    # save_bar_chart_insect_role(df_plot, name)
+    # 
+    # # # Save the node and edge data for Gephi
+    # # nodes_o <- paste0("nodes_", gsub(" ", "_", name), ".csv")
+    # # edges_o <- paste0("edges_", gsub(" ", "_", name), ".csv")
+    # # convert_data_for_gephi(data_merged, bird_forest_coverage, nodes_o, edges_o)
+    # 
+    # # Visualize the extinction curve in different site type
+    # repeat_time <- 10000
+    # results_list[["random"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, )
+    # abundance <- bird_forest_coverage %>% arrange(Bird.Rarity.Score) %>% pull(BirdLife.Name.CORRECT)
+    # results_list[["abundance"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, abundance)
+    # forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
+    # results_list[["distance_to_forest"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, forest_dependence_distance)
+    # forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
+    # results_list[["forest_canopy"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, forest_dependence_canopy)
   }
 
-  for(metric in names(results_list)){
-    stability_pest_cotrol_result <- list(c(metric))
-    save_extinction_curve_by_metric(results_list[[metric]], gsub("_", " ", metric))
-    for(sites in names(results_list[[metric]])){
-      normalize <- function(x) {
-        return ((x - min(x)) / (max(x) - min(x)))
-      }
-      normalized_sequence <- normalize(results_list[[metric]][[sites]]$mean)
-      stability_pest_cotrol_sum <- calculate_auc(normalized_sequence)
-      stability_pest_cotrol_result[[length(stability_pest_cotrol_result) + 1]] <- stability_pest_cotrol_sum
-      half_life_proportion <- which(normalized_sequence < 0.5)[1] / length(normalized_sequence) # half-life stability
-      stability_pest_cotrol_result[[length(stability_pest_cotrol_result) + 1]] <- half_life_proportion*100
-    }
-    # results_pest_control_df <- rbind(results_pest_control_df, setNames(data.frame(t(unlist(stability_pest_cotrol_result)), stringsAsFactors = FALSE), c("metrics", "total_avg", "total_half", "forest_avg", "forest_half", "edge_avg", "edge_half", "agriculture_avg", "agriculture_half")), stringsAsFactors = FALSE)
-    results_pest_control_df <- rbind(results_pest_control_df, setNames(data.frame(t(unlist(stability_pest_cotrol_result)), stringsAsFactors = FALSE), c("metrics", "forest_avg", "forest_half", "edge_avg", "edge_half", "agriculture_avg", "agriculture_half")), stringsAsFactors = FALSE)
-  }
-
-  pest_control_name <- ifelse(is_all, {is_all <<- FALSE; "stability_potential_pest_control"}, "stability_confirmed_pest_control")
-  write.csv(results_pest_control_df, file = paste0(pest_control_name, ".csv"), row.names = FALSE)
-
-  forest_canopy_row <- results_pest_control_df %>%
-    filter(metrics == "forest_canopy")
-
-  # 将相应的数据更新到 basic_network_analysis 数据框中
-  basic_network_analysis <- basic_network_analysis %>%
-    mutate(
-      auc = case_when(
-        network_name == "Forest Interior" ~ forest_canopy_row$forest_avg,
-        network_name == "Forest Edge" ~ forest_canopy_row$edge_avg,
-        network_name == "Agriculture" ~ forest_canopy_row$agriculture_avg
-      ),
-      half_life = case_when(
-        network_name == "Forest Interior" ~ forest_canopy_row$forest_half,
-        network_name == "Forest Edge" ~ forest_canopy_row$edge_half,
-        network_name == "Agriculture" ~ forest_canopy_row$agriculture_half
-      )
-    )
-  
-  
-  results_pest_control_long <- results_pest_control_df %>%
-    pivot_longer(cols = -metrics, names_to = "variable", values_to = "value") %>%
-    mutate(value = as.numeric(value))
-
-  for (metric in unique(results_pest_control_df$metrics)) {
-    p <- plot_auc_half_life(results_pest_control_long, metric)
-    ggsave(paste0("plot_", metric, ".png"), plot = p, width = 8, height = 6)
-  }
-  
-  plot_network_metric(basic_network_analysis)
-  plot_species_metric(species_result)
-  
+  # for(metric in names(results_list)){
+  #   stability_pest_cotrol_result <- list(c(metric))
+  #   save_extinction_curve_by_metric(results_list[[metric]], gsub("_", " ", metric))
+  #   for(sites in names(results_list[[metric]])){
+  #     normalize <- function(x) {
+  #       return ((x - min(x)) / (max(x) - min(x)))
+  #     }
+  #     normalized_sequence <- normalize(results_list[[metric]][[sites]]$mean)
+  #     stability_pest_cotrol_sum <- calculate_auc(normalized_sequence)
+  #     stability_pest_cotrol_result[[length(stability_pest_cotrol_result) + 1]] <- stability_pest_cotrol_sum
+  #     half_life_proportion <- which(normalized_sequence < 0.5)[1] / length(normalized_sequence) # half-life stability
+  #     stability_pest_cotrol_result[[length(stability_pest_cotrol_result) + 1]] <- half_life_proportion*100
+  #   }
+  #   # results_pest_control_df <- rbind(results_pest_control_df, setNames(data.frame(t(unlist(stability_pest_cotrol_result)), stringsAsFactors = FALSE), c("metrics", "total_avg", "total_half", "forest_avg", "forest_half", "edge_avg", "edge_half", "agriculture_avg", "agriculture_half")), stringsAsFactors = FALSE)
+  #   results_pest_control_df <- rbind(results_pest_control_df, setNames(data.frame(t(unlist(stability_pest_cotrol_result)), stringsAsFactors = FALSE), c("metrics", "forest_avg", "forest_half", "edge_avg", "edge_half", "agriculture_avg", "agriculture_half")), stringsAsFactors = FALSE)
+  # }
+# 
+#   pest_control_name <- ifelse(is_all, {is_all <<- FALSE; "stability_potential_pest_control"}, "stability_confirmed_pest_control")
+#   write.csv(results_pest_control_df, file = paste0(pest_control_name, ".csv"), row.names = FALSE)
+# 
+#   forest_canopy_row <- results_pest_control_df %>%
+#     filter(metrics == "forest_canopy")
+# 
+#   # 将相应的数据更新到 basic_network_analysis 数据框中
+#   basic_network_analysis <- basic_network_analysis %>%
+#     mutate(
+#       auc = case_when(
+#         network_name == "Forest Interior" ~ forest_canopy_row$forest_avg,
+#         network_name == "Forest Edge" ~ forest_canopy_row$edge_avg,
+#         network_name == "Agriculture" ~ forest_canopy_row$agriculture_avg
+#       ),
+#       half_life = case_when(
+#         network_name == "Forest Interior" ~ forest_canopy_row$forest_half,
+#         network_name == "Forest Edge" ~ forest_canopy_row$edge_half,
+#         network_name == "Agriculture" ~ forest_canopy_row$agriculture_half
+#       )
+#     )
+#   
+#   
+#   results_pest_control_long <- results_pest_control_df %>%
+#     pivot_longer(cols = -metrics, names_to = "variable", values_to = "value") %>%
+#     mutate(value = as.numeric(value))
+# 
+#   for (metric in unique(results_pest_control_df$metrics)) {
+#     p <- plot_auc_half_life(results_pest_control_long, metric)
+#     ggsave(paste0("plot_", metric, ".png"), plot = p, width = 8, height = 6)
+#   }
+#   
+#   plot_network_metric(basic_network_analysis)
+#   plot_species_metric(species_result)
+#   
 }
 
 
 
 stop()
-
 
 
 
