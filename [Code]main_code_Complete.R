@@ -37,13 +37,13 @@ library(iNEXT)
 # The code to filter arthropods and ambiguous species by Ariane
 filter_by_species <- function(pre_data){
   pre_data$species <- gsub("sp.*", "sp.", pre_data$species)
-  arthropoda_and_species_only <- data %>%
+  arthropoda_and_species_only <- pre_data %>%
     dplyr::filter(phylum == "Arthropoda") %>% # only keep arthropods
     dplyr::filter(order != "Mesostigmata"&  # exclude arachnids which are mites and therefore not dietary items
                     order != "Sarcoptiformes"&
                     order != "Trombidiformes"&
                     species != "Pseudacanthotermes militaris") %>%
-    filter(!is.na(species)) %>%  # only keep OTUs identified to genus or species level
+    filter(!is.na(species)) %>%  # only keep OTUs identified to genus or species levelzhe
     filter(!is.na(genus)) %>%
     distinct()
   
@@ -230,6 +230,60 @@ update_insect_data <- function(df1, df2) {
   return(processed_df)
 }
 
+# 扩展的 web_feature 函数
+web_feature <- function(bird_insect_web, bird_forest_coverage, insect_role_all){
+  # 将鸟名和昆虫名从bird_insect_web中提取出来
+  bird_names <- colnames(bird_insect_web)
+  insect_names <- rownames(bird_insect_web)
+  
+  # 匹配并统计森林鸟类和非森林鸟类
+  bird_forest_coverage_filtered <- bird_forest_coverage %>%
+    filter(BirdLife.Name.CORRECT %in% bird_names)
+  
+  forest_bird_names <- bird_forest_coverage_filtered %>% 
+    filter(Bird.Type == "Forest bird") %>% 
+    pull(BirdLife.Name.CORRECT)
+  
+  non_forest_bird_names <- bird_forest_coverage_filtered %>% 
+    filter(Bird.Type == "Non-Forest bird") %>% 
+    pull(BirdLife.Name.CORRECT)
+  
+  # 匹配并统计害虫和非害虫
+  insect_role_filtered <- insect_role_all %>%
+    filter(Species %in% insect_names)
+  
+  pest_insect_names <- insect_role_filtered %>%
+    filter(Role == "Pest") %>%
+    pull(Species)
+  
+  non_pest_insect_names <- insect_role_filtered %>%
+    filter(Role != "Pest") %>%
+    pull(Species)
+  
+  # 计算交互强度（和，不是度）
+  forest_pest_interaction_strength <- sum(bird_insect_web[rownames(bird_insect_web) %in% pest_insect_names, colnames(bird_insect_web) %in% forest_bird_names])
+  forest_non_pest_interaction_strength <- sum(bird_insect_web[rownames(bird_insect_web) %in% non_pest_insect_names, colnames(bird_insect_web) %in% forest_bird_names])
+  
+  non_forest_pest_interaction_strength <- sum(bird_insect_web[rownames(bird_insect_web) %in% pest_insect_names, colnames(bird_insect_web) %in% non_forest_bird_names])
+  non_forest_non_pest_interaction_strength <- sum(bird_insect_web[rownames(bird_insect_web) %in% non_pest_insect_names, colnames(bird_insect_web) %in% non_forest_bird_names])
+  
+  # 统计数量
+  forest_bird_count <- length(forest_bird_names)
+  non_forest_bird_count <- length(non_forest_bird_names)
+  pest_count <- length(pest_insect_names)
+  total_insects_count <- length(insect_names)
+  
+  # 打印结果
+  cat("Forest bird count:", forest_bird_count, "\n")
+  cat("Non-Forest bird count:", non_forest_bird_count, "\n")
+  cat("Pest count:", pest_count, "\n")
+  cat("Total insect count:", total_insects_count, "\n")
+  cat("Forest bird - Pest interaction strength:", forest_pest_interaction_strength, "\n")
+  cat("Forest bird - Non-Pest interaction strength:", forest_non_pest_interaction_strength, "\n")
+  cat("Non-Forest bird - Pest interaction strength:", non_forest_pest_interaction_strength, "\n")
+  cat("Non-Forest bird - Non-Pest interaction strength:", non_forest_non_pest_interaction_strength, "\n")
+}
+
 
 ### Bipartite network visualization
 # function for coloring the forest bird green
@@ -382,7 +436,9 @@ calculate_pest_percentage <- function(bird_species, web, insect_role) {
   ))
 }
 
-calculate_bird_feature <- function(site_name, bird_insect_web, insect_role){
+
+
+calculate_bird_feature <- function(site_name, bird_insect_web, bird_insect_web_weighted, insect_role){
   # calculate pest proportion in individual bird species
   result_list <- list()
   for (bird_name in colnames(bird_insect_web)) {
@@ -392,39 +448,35 @@ calculate_bird_feature <- function(site_name, bird_insect_web, insect_role){
   bird_species_professionalism <- specieslevel(bird_insect_web, level = "higher", index = "d") # species result 2
   
   result_modularity <- calculate_modularity(bird_insect_web) # network result 1
-  result_nested <- networklevel(bird_insect_web, index = "weighted NODF") # network result 2
+  result_nested <- networklevel(bird_insect_web, index = "NODF") # network result 2
 
   # bipartite projects to unipartite
   bird_insect_matrix <- as.matrix(bird_insect_web)
-  network_specialization <- H2fun(bird_insect_matrix) # network result 3
+  network_specialization <- H2fun(bird_insect_web_weighted) # network result 3
   g <- graph_from_biadjacency_matrix(bird_insect_matrix)
   bird_projection <- bipartite_projection(g)
   bird_network <- bird_projection$proj2
-  network_diameter <- diameter(bird_network, directed = FALSE, unconnected = FALSE) # network result 4
+  network_diameter <- diameter(bird_network, directed = FALSE, unconnected = FALSE) 
+  total_birds <- length(V(bird_network))
+  diet_overlap <- (network_diameter - 1) / (total_birds - 2) # network result 4
+  diet_overlap <- networklevel(bird_insect_web, index = "niche overlap")[["niche.overlap.HL"]]
   
-  # unipartite species graph analysis on igraph
   bird_nodes <- V(bird_network)
   total_birds <- length(bird_nodes)
-  total_edge_weight <- sum(E(bird_network)$weight) # Calculate the sum of the weights of all edges in the network
-  share_recipe_proportion <- numeric(total_birds)
-  edge_weight_proportion <- numeric(total_birds)
-  for (i in seq_along(bird_nodes)) {
-    bird <- bird_nodes[i]
-    bird_degree <- degree(bird_network, v = bird)
-    share_recipe_proportion[i] <- bird_degree / (total_birds - 1)
-    bird_edge_weight <- sum(E(bird_network)[incident(bird_network, bird)]$weight)
-    edge_weight_proportion[i] <- bird_edge_weight / total_edge_weight
-  }
-  bird_species_overlap <- data.frame(
-    share_recipe_proportion = share_recipe_proportion,
-    edge_weight_proportion = edge_weight_proportion,
+  
+  # 使用 closeness 函数计算每个鸟类节点的紧密度
+  closeness_scores <- closeness(bird_network, mode = "all", normalized = TRUE)
+  
+  # 将结果转换为数据框
+  bird_closeness <- data.frame(
+    closeness = closeness_scores,
     row.names = names(bird_nodes)
   )
   
   merged_df <- merge(bird_species_pest_proportion, bird_species_professionalism, by = "row.names")
   rownames(merged_df) <- merged_df$Row.names
   merged_df <- merged_df[, -1]
-  merged_df <- merge(merged_df, bird_species_overlap, by = "row.names")
+  merged_df <- merge(merged_df, bird_closeness, by = "row.names")
   rownames(merged_df) <- merged_df$Row.names
   merged_df <- merged_df[, -1]
   
@@ -434,9 +486,9 @@ calculate_bird_feature <- function(site_name, bird_insect_web, insect_role){
     network_metrics = c(
       network_name = site_name,
       modularity = result_modularity,
-      nestedness = result_nested,
-      specialization = network_specialization,
-      diameter = network_diameter
+      nestedness = result_nested[["NODF"]],
+      specialization = network_specialization[["H2"]],
+      diameter = diet_overlap
     )
   ))
 }
@@ -444,22 +496,20 @@ calculate_bird_feature <- function(site_name, bird_insect_web, insect_role){
 
 
 
-
-
-
-
-
-calculate_modularity <- function(bird_insect_web){
-  # 将 bird_insect_web 转换为 igraph 对象
-  g <- graph_from_incidence_matrix(bird_insect_web, weighted = TRUE)
-  # 使用适合二部图的社区检测算法
-  # `cluster_fast_greedy` 不适用于加权二部图，所以这里使用 `cluster_louvain`
-  community <- cluster_louvain(g)
+calculate_modularity <- function(bird_insect_web) {
+  # 将 bird_insect_web 转换为 igraph 对象，不使用权重
+  g <- graph_from_incidence_matrix(bird_insect_web, weighted = NULL)
+  
+  # 使用适合二部图的社区检测算法：cluster_walktrap
+  community <- cluster_walktrap(g)
+  
   # 计算模块度
   modularity_value <- modularity(community)
+  
   return(modularity_value)
-  # # 如果想获取每个节点的社区
-  # membership(community)
+  
+  # 如果想获取每个节点的社区
+  # return(membership(community))
 }
 
 
@@ -617,50 +667,6 @@ plot_extinction_curve <- function(result) {
   print(p)
 }
 
-# # function to visualize the extinction curve of pest control
-# save_extinction_curve <- function(extinction_data, plot_name) {
-#   time_stamp <- format(Sys.time(), "%Y-%m-%d_%H-%M-%S")
-#   
-#   # 合并所有灭绝曲线成一个数据框
-#   combined_df <- bind_rows(lapply(extinction_data, function(data) {
-#     data.frame(
-#       Step = 0:(length(data$curve) - 1),
-#       Remaining_Pests = data$curve,
-#       Sequence = data$name
-#     )
-#   }))
-#   
-#   # 找到每个序列的第一个点和最后一个点
-#   reference_lines <- combined_df %>%
-#     group_by(Sequence) %>%
-#     summarize(
-#       First_Step = min(Step),
-#       Last_Step = max(Step),
-#       First_Remaining_Pests = first(Remaining_Pests),
-#       Last_Remaining_Pests = last(Remaining_Pests)
-#     )
-#   
-#   # 绘制结果
-#   p <- ggplot(combined_df, aes(x = Step, y = Remaining_Pests, color = Sequence)) +
-#     geom_line() +
-#     geom_point() +
-#     geom_segment(data = reference_lines, 
-#                  aes(x = First_Step, xend = Last_Step, 
-#                      y = First_Remaining_Pests, yend = Last_Remaining_Pests), 
-#                  linetype = "dashed", color = "black") +
-#     labs(title = paste0("Extinction Curves (Pest under control) in ", plot_name, " Site"),
-#          x = "Extinction Step",
-#          y = "Pests under control") +
-#     theme_minimal() +
-#     scale_color_manual(values = rainbow(length(extinction_data))) +
-#     theme(legend.title = element_blank(),
-#           legend.position = "right",
-#           legend.box.margin = margin(0, 10, 0, 0))
-#   
-#   # 设置图形的宽度和高度，扩展图形的画布
-#   ggsave(paste0("extinction_curves_", plot_name, "_", time_stamp, ".jpg"), p,
-#          width = 7.5, height = 5, units = "in")
-# }
 
 
 save_extinction_curve_by_metric <- function(extinction_data, plot_name) {
@@ -773,9 +779,148 @@ plot_auc_half_life <- function(data, metric_name) {
   return(p)
 }
 
+# Plot all metrics of species
+plot_species_metric <- function(species_result){
+  convert_species_result_to_df <- function(species_result) {
+    data_list <- list()
+    for (site_type in names(species_result)) {
+      # 提取当前 site_type 对应的数据框
+      df <- species_result[[site_type]]
+      
+      # 创建一个新的数据框，包括 species 列和 site_type 列
+      df_new <- data.frame(
+        species = rownames(df),
+        site_type = site_type,
+        df
+      )
+      
+      # 将处理后的数据框添加到列表中
+      data_list[[site_type]] <- df_new
+    }
+    
+    # 将所有小数据框合并成一个大的数据框
+    final_df <- do.call(rbind, data_list)
+    
+    return(final_df)
+  }
+  
+  # 使用该函数将 species_result 转换为数据框
+  final_df <- convert_species_result_to_df(species_result)
+  
+  # 确保所有列是数值型
+  final_df <- final_df %>%
+    mutate(across(c(pest_interaction_percentage, pest_species_percentage, d, closeness), as.numeric))
+  
+  final_df[["pest_species_percentage"]] <- final_df[["pest_species_percentage"]] / 100
+  final_df[["pest_interaction_percentage"]] <- final_df[["pest_interaction_percentage"]] / 100
+  
+  # 将需要绘图的四大类提取出来，并将数据转换为长格式
+  plot_data <- final_df %>%
+    select(species, site_type, pest_interaction_percentage, pest_species_percentage, d, closeness) %>%
+    melt(id.vars = c("species", "site_type"), 
+         measure.vars = c("pest_interaction_percentage", "pest_species_percentage", "d", "closeness"),
+         variable.name = "feature", 
+         value.name = "value")
+  
+  # 将 site_type 转换为因子，并设置因子级别顺序
+  plot_data$site_type <- factor(plot_data$site_type, levels = c("Forest Interior", "Forest Edge", "Agriculture"))
+  
+  # 绘制箱线图，并按照 site_type 排序
+  feature_levels <- levels(plot_data$feature)
+  vline_positions <- seq(1.5, length(feature_levels) - 0.5, by = 1)
+  
+  p <- ggplot(plot_data, aes(x = feature, y = value, fill = site_type)) +
+    geom_boxplot(outlier.shape = NA, width = 0.6, position = position_dodge(width = 0.8)) + # 设置箱线图宽度和位置
+    scale_fill_manual(values = c("Forest Interior" = "#238E23", "Forest Edge" = "#91A724", "Agriculture" = "darkgoldenrod2")) + # 设置填充颜色
+    labs(title = "Standardized Box Plot of Bird Species Features by Site Type",
+         x = "Feature",
+         y = "Value of Species Metrics",
+       fill = "Site Type") +  # 修改y轴标签名称
+    scale_x_discrete(labels = c("Pest Dietary (PD)", "Pest Dietary (PD)", "Species Specialisation (d')", "Diet Overlap (DO)")) +  # 修改x轴标签顺序和名称
+    scale_y_continuous(expand = c(0, 0), limits = c(0, 1)) + # 设置y轴范围，并将x轴移动到y=0
+    theme_minimal() +
+    theme(
+      legend.position = "right",                  # 将图例放在右侧
+      panel.grid = element_blank(),               # 去掉网格线
+      axis.line.y = element_line(color = "black"),  # 增加y轴线
+      axis.ticks.y = element_line(color = "black"), # 增加y轴刻度
+      axis.line.x = element_line(color = "black", size = 0.5), # 增加x轴线
+      panel.border = element_blank()              # 去掉边框
+    ) +
+    geom_vline(xintercept = vline_positions, linetype = "dashed", color = "grey", size = 0.7) # 添加每个大类之间的虚线
+  
+  
+  print(p)
+}
 
 
 
+# Plot the all metrics of network
+plot_network_metric <- function(basic_network_analysis) {
+  colors <- c(
+    "Forest Interior" = "#238E23",    # 绿色
+    "Forest Edge" = "#91A724",        # 浅绿黄色
+    "Agriculture" = "darkgoldenrod2"  # 暗金黄色
+  )
+  
+  df <- basic_network_analysis %>%
+    gather(key = "Metric", value = "Value", -network_name) %>%
+    mutate(LandUseType = case_when(
+      network_name == "Forest Interior" ~ "Forest Interior",
+      network_name == "Forest Edge" ~ "Forest Edge",
+      network_name == "Agriculture" ~ "Agriculture"
+    ))
+  
+  # 将 Metric 设置为因子，并指定显示顺序
+  df$Metric <- factor(df$Metric, levels = c("diameter", "modularity", "specialization", "nestedness", "auc", "half_life"))
+  
+  # 将 LandUseType 设置为因子，并指定顺序
+  df$LandUseType <- factor(df$LandUseType, levels = c("Forest Interior", "Forest Edge", "Agriculture"))
+  
+  df$Value <- as.numeric(df$Value)
+  
+  # 数据标准化：按每个指标在不同用地类型内的值进行标准化
+  df <- df %>%
+    group_by(Metric) %>%
+    mutate(StandardizedValue = (Value - mean(Value)) / sd(Value)) %>%
+    ungroup()
+  
+  # 绘制条形图
+  p <- ggplot(df, aes(x = Metric, y = StandardizedValue, fill = LandUseType)) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.8), color = "black", width = 0.7) +  # 设置条形图宽度和位置
+    geom_hline(yintercept = 0, color = "black", linetype = "solid", size = 0.7) +  # 添加 y=0 的辅助线
+    scale_fill_manual(values = colors) +  # 使用指定的颜色
+    theme_minimal() +
+    labs(title = "Changes in Metrics Across Different Land Use Types",
+         x = "Metrics",
+         y = "Standardized Value",
+         fill = "Site Type") +
+    scale_x_discrete(labels = c(
+      "diameter" = expression(DO), 
+      "modularity" = expression(Q), 
+      "specialization" = expression(H[2] * "'"), 
+      "nestedness" = expression(N), 
+      "auc" = expression(AUC), 
+      "half_life" = expression(t["1/2"])
+    )) +
+    theme(
+      axis.line = element_line(color = "black"),  # 添加x和y轴线
+      panel.grid = element_blank(),  # 移除网格线
+      axis.text.x = element_text(angle = 0, hjust = 0.5),
+      axis.ticks = element_line(color = "black"),  # 添加轴刻度
+      axis.text = element_text(size = 10)
+    ) +
+    geom_vline(xintercept = seq(1.5, 5.5, by = 1), linetype = "dashed", color = "grey", size = 0.7)  # 添加每个大类之间的分割虚线
+  
+  # 显示图表
+  print(p)
+}
+
+plot_network_metric(basic_network_analysis) 
+
+# End of function defination
+
+##############################################################################################################################
 ### Start data processing
 # load data
 data <- read.csv("./009MRes Denian Li Project/Complete Diet Data/fwh_consensus.csv")
@@ -821,7 +966,7 @@ is_all <- TRUE
 for(insect_role in list(insect_role_all)){
   results_pest_control_df <- data.frame(matrix(ncol = 9, nrow = 0), stringsAsFactors = FALSE) # make empty data frame to store stability pest control result
   names(results_pest_control_df) <- c("metrics", "total_avg", "total_half", "forest_avg", "forest_half", "edge_avg", "edge_half", "agriculture_avg", "agriculture_half")
-  pest_distribution <- list()
+  species_result <- list()
   basic_network_analysis <- data.frame(
     network_name = character(), 
     modularity = numeric(),
@@ -837,135 +982,124 @@ for(insect_role in list(insect_role_all)){
     valid_columns <- bird_forest_coverage$BirdLife.Name.CORRECT %in% colnames(data_merged)
     data_merged_reordered <- data_merged[, bird_forest_coverage$BirdLife.Name.CORRECT[valid_columns]]
     data_merged_reordered <- cbind(Insect_species=data_merged[["Insect_species"]], data_merged_reordered)
-    bird_insect_web <- data_merged_reordered %>% column_to_rownames(var = 'Insect_species')
+    bird_insect_web_weight <- data_merged_reordered %>% column_to_rownames(var = 'Insect_species')
+    bird_insect_web <- bird_insect_web_weight
+    bird_insect_web[bird_insect_web != 0] <- 1
     
     # calculate the network feature
-    basic_analysis <- calculate_bird_feature(name, bird_insect_web, insect_role)
-    bird_species_feature <- basic_analysis$bird_metrics # used for draw
+    basic_analysis <- calculate_bird_feature(name, bird_insect_web, bird_insect_web_weight, insect_role)
+    species_result[[name]] <- basic_analysis$bird_metrics # used for draw
     network_feature <- basic_analysis$network_metrics
-    result_df <- rbind(basic_network_analysis, as.data.frame(t(network_feature), stringsAsFactors = FALSE))
+    basic_network_analysis <- rbind(basic_network_analysis, as.data.frame(t(network_feature), stringsAsFactors = FALSE))
     
     # # statistics pest distribution
     # pest_species <- insect_role$Species[insect_role$Role == "Pest"]
     # pest_distribution[[length(pest_distribution) + 1]] <- sum(pest_species %in% rownames(bird_insect_web))
 
-    # # Visualize bipartite plot
-    # save_forest_category_bipartite(bird_forest_coverage, insect_role, bird_insect_web, name)
-    # 
-    # # Visualize proportion bar chart
-    # forest_birds <- bird_forest_coverage %>%
-    #   filter(average.Distance.to.Forest.km <= 0) %>%
-    #   pull(BirdLife.Name.CORRECT) %>%
-    #   intersect(colnames(bird_insect_web))
-    # 
-    # non_forest_birds <- bird_forest_coverage %>%
-    #   filter(average.Distance.to.Forest.km > 0) %>%
-    #   pull(BirdLife.Name.CORRECT) %>%
-    #   intersect(colnames(bird_insect_web))
-    # 
-    # role_groups <- split(insect_role, insect_role$Role)
-    # bird_insect_web_by_role <- list()
-    # for(role in names(role_groups)) {
-    #   species_in_role <- role_groups[[role]]$Species
-    #   bird_insect_web_by_role[[role]] <- bird_insect_web %>%
-    #     filter(row.names(.) %in% species_in_role)
-    # }
+    # Visualize bipartite plot
+    save_forest_category_bipartite(bird_forest_coverage, insect_role, bird_insect_web, name)
 
-    # static_data <- cbind(
-    #   c("Pest", "Non-pest", "Natural enemy", "Vector of animal disease"),
-    #   rbind(count_nonzero(bird_insect_web_by_role$Pest, forest_birds, non_forest_birds),
-    #         count_nonzero(bird_insect_web_by_role$`Non-pest`, forest_birds, non_forest_birds),
-    #         count_nonzero(bird_insect_web_by_role$`Natural enemy`, forest_birds, non_forest_birds),
-    #         count_nonzero(bird_insect_web_by_role$`Vector of animal disease`, forest_birds, non_forest_birds)))
-    # colnames(static_data) <- c("Insect Role", "Forest birds only", "Shared", "Non-forest birds only")
-    # static_df <- as.data.frame(static_data)
-    # static_df[, -1] <- lapply(static_df[, -1], as.numeric)
-    # df_percentages <- static_df %>%
-    #   mutate(across(-`Insect Role`, ~ . / rowSums(static_df[, -1]))) %>%
-    #   mutate(`Insect Role` = factor(`Insect Role`, levels = rev(`Insect Role`)))
-    # df_plot <- melt(df_percentages, id.vars = "Insect Role", variable.name = "Bird Type",
-    #                 value.name = "proportion")
-    # save_bar_chart_insect_role(df_plot, name)
+    # Visualize proportion bar chart
+    forest_birds <- bird_forest_coverage %>%
+      filter(average.Distance.to.Forest.km <= 0) %>%
+      pull(BirdLife.Name.CORRECT) %>%
+      intersect(colnames(bird_insect_web))
 
-    # static_data <- cbind(
-    #   c("Pest", "Non-pest"),
-    #   rbind(count_nonzero(bird_insect_web_by_role$Pest, forest_birds, non_forest_birds),
-    #         count_nonzero(bird_insect_web_by_role$`Non-pest`, forest_birds, non_forest_birds)))
-    # colnames(static_data) <- c("Insect Role", "Forest birds only", "Shared", "Non-forest birds only")
-    # static_df <- as.data.frame(static_data)
-    # static_df[, -1] <- lapply(static_df[, -1], as.numeric)
-    # df_percentages <- static_df %>%
-    #   mutate(across(-`Insect Role`, ~ . / rowSums(static_df[, -1]))) %>%
-    #   mutate(`Insect Role` = factor(`Insect Role`, levels = rev(`Insect Role`)))
-    # df_plot <- melt(df_percentages, id.vars = "Insect Role", variable.name = "Bird Type",
-    #                 value.name = "proportion")
-    # save_bar_chart_insect_role(df_plot, name)
+    non_forest_birds <- bird_forest_coverage %>%
+      filter(average.Distance.to.Forest.km > 0) %>%
+      pull(BirdLife.Name.CORRECT) %>%
+      intersect(colnames(bird_insect_web))
+
+    role_groups <- split(insect_role, insect_role$Role)
+    bird_insect_web_by_role <- list()
+    for(role in names(role_groups)) {
+      species_in_role <- role_groups[[role]]$Species
+      bird_insect_web_by_role[[role]] <- bird_insect_web %>%
+        filter(row.names(.) %in% species_in_role)
+    }
+    
+  
+    # Plot the proportion of only pest and non-pest
+    static_data <- cbind(
+      c("Pest", "Non-pest"),
+      rbind(count_nonzero(bird_insect_web_by_role$Pest, forest_birds, non_forest_birds),
+            count_nonzero(bird_insect_web_by_role$`Non-pest`, forest_birds, non_forest_birds)))
+    colnames(static_data) <- c("Insect Role", "Forest birds only", "Shared", "Non-forest birds only")
+    static_df <- as.data.frame(static_data)
+    static_df[, -1] <- lapply(static_df[, -1], as.numeric)
+    df_percentages <- static_df %>%
+      mutate(across(-`Insect Role`, ~ . / rowSums(static_df[, -1]))) %>%
+      mutate(`Insect Role` = factor(`Insect Role`, levels = rev(`Insect Role`)))
+    df_plot <- melt(df_percentages, id.vars = "Insect Role", variable.name = "Bird Type",
+                    value.name = "proportion")
+    save_bar_chart_insect_role(df_plot, name)
 
     # # Save the node and edge data for Gephi
     # nodes_o <- paste0("nodes_", gsub(" ", "_", name), ".csv")
     # edges_o <- paste0("edges_", gsub(" ", "_", name), ".csv")
     # convert_data_for_gephi(data_merged, bird_forest_coverage, nodes_o, edges_o)
 
-    
-    # # Visualize the extinction curve in different site type
-    # repeat_time <- 10000
-    # results_list[["random"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, )
-    # abundance <- bird_forest_coverage %>% arrange(Bird.Rarity.Score) %>% pull(BirdLife.Name.CORRECT)
-    # results_list[["abundance"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, abundance)
-    # forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
-    # results_list[["distance_to_forest"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, forest_dependence_distance)
-    # forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
-    # results_list[["forest_canopy"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, forest_dependence_canopy)
-    
-    # # Find the Correlation between the order and the bird body metrics
-    # abundance <- bird_forest_coverage %>% arrange(Bird.Rarity.Score) %>% pull(BirdLife.Name.CORRECT)
-    # for(bird_body_metric in c("Beak.Length.Culmen", "Beak.Length.Nares", "Beak.Width", "Beak.Depth", "Tarsus.Length", "Wing.Length", "Kipps.Distance", "Secondary1", "Hand.wing.Index", "Tail.Length", "Gape.Size", "Weight...g.")){
-    #   metric_sequence <- extract_beak_length(abundance, bird_meta, "BirdLife.Name.CORRECT", bird_body_metric)
-    #   print(bird_body_metric)
-    #   check_correlation(metric_sequence)
-    # }
-    # forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
-    # for(bird_body_metric in c("Beak.Length.Culmen", "Beak.Length.Nares", "Beak.Width", "Beak.Depth", "Tarsus.Length", "Wing.Length", "Kipps.Distance", "Secondary1", "Hand.wing.Index", "Tail.Length", "Gape.Size", "Weight...g.")){
-    #   metric_sequence <- extract_beak_length(forest_dependence_distance, bird_meta, "BirdLife.Name.CORRECT", bird_body_metric)
-    #   print(bird_body_metric)
-    #   check_correlation(metric_sequence)
-    # }
-    # forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
-    # for(bird_body_metric in c("Beak.Length.Culmen", "Beak.Length.Nares", "Beak.Width", "Beak.Depth", "Tarsus.Length", "Wing.Length", "Kipps.Distance", "Secondary1", "Hand.wing.Index", "Tail.Length", "Gape.Size", "Weight...g.")){
-    #   metric_sequence <- extract_beak_length(forest_dependence_canopy, bird_meta, "BirdLife.Name.CORRECT", bird_body_metric)
-    #   print(bird_body_metric)
-    #   check_correlation(metric_sequence)
-    # }
+    # Visualize the extinction curve in different site type
+    repeat_time <- 10000
+    results_list[["random"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, )
+    abundance <- bird_forest_coverage %>% arrange(Bird.Rarity.Score) %>% pull(BirdLife.Name.CORRECT)
+    results_list[["abundance"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, abundance)
+    forest_dependence_distance <- bird_forest_coverage %>% arrange(average.Distance.to.Forest.km) %>% pull(BirdLife.Name.CORRECT)
+    results_list[["distance_to_forest"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, forest_dependence_distance)
+    forest_dependence_canopy <- bird_forest_coverage %>% arrange(desc(Bird.Forest.Cover.200m)) %>% pull(BirdLife.Name.CORRECT)
+    results_list[["forest_canopy"]][[name]] <- extinction_curve(bird_insect_web, insect_role, repeat_time, forest_dependence_canopy)
   }
 
-  # for(metric in names(results_list)){
-  #   stability_pest_cotrol_result <- list(c(metric))
-  #   save_extinction_curve_by_metric(results_list[[metric]], gsub("_", " ", metric))
-  #   for(sites in names(results_list[[metric]])){
-  #     normalize <- function(x) {
-  #       return ((x - min(x)) / (max(x) - min(x)))
-  #     }
-  #     normalized_sequence <- normalize(results_list[[metric]][[sites]]$mean)
-  #     stability_pest_cotrol_sum <- calculate_auc(normalized_sequence)
-  #     stability_pest_cotrol_result[[length(stability_pest_cotrol_result) + 1]] <- stability_pest_cotrol_sum
-  #     half_life_proportion <- which(normalized_sequence < 0.5)[1] / length(normalized_sequence) # half-life stability
-  #     stability_pest_cotrol_result[[length(stability_pest_cotrol_result) + 1]] <- half_life_proportion*100
-  #   }
-  #   # results_pest_control_df <- rbind(results_pest_control_df, setNames(data.frame(t(unlist(stability_pest_cotrol_result)), stringsAsFactors = FALSE), c("metrics", "total_avg", "total_half", "forest_avg", "forest_half", "edge_avg", "edge_half", "agriculture_avg", "agriculture_half")), stringsAsFactors = FALSE)
-  #   results_pest_control_df <- rbind(results_pest_control_df, setNames(data.frame(t(unlist(stability_pest_cotrol_result)), stringsAsFactors = FALSE), c("metrics", "forest_avg", "forest_half", "edge_avg", "edge_half", "agriculture_avg", "agriculture_half")), stringsAsFactors = FALSE)
-  # }
-  # 
-  # pest_control_name <- ifelse(is_all, {is_all <<- FALSE; "stability_potential_pest_control"}, "stability_confirmed_pest_control")
-  # write.csv(results_pest_control_df, file = paste0(pest_control_name, ".csv"), row.names = FALSE)
-  # 
-  # results_pest_control_long <- results_pest_control_df %>%
-  #   pivot_longer(cols = -metrics, names_to = "variable", values_to = "value") %>%
-  #   mutate(value = as.numeric(value))
-  # 
-  # for (metric in unique(results_pest_control_df$metrics)) {
-  #   p <- plot_auc_half_life(results_pest_control_long, metric)
-  #   ggsave(paste0("plot_", metric, ".png"), plot = p, width = 8, height = 6)
-  # }
+  for(metric in names(results_list)){
+    stability_pest_cotrol_result <- list(c(metric))
+    save_extinction_curve_by_metric(results_list[[metric]], gsub("_", " ", metric))
+    for(sites in names(results_list[[metric]])){
+      normalize <- function(x) {
+        return ((x - min(x)) / (max(x) - min(x)))
+      }
+      normalized_sequence <- normalize(results_list[[metric]][[sites]]$mean)
+      stability_pest_cotrol_sum <- calculate_auc(normalized_sequence)
+      stability_pest_cotrol_result[[length(stability_pest_cotrol_result) + 1]] <- stability_pest_cotrol_sum
+      half_life_proportion <- which(normalized_sequence < 0.5)[1] / length(normalized_sequence) # half-life stability
+      stability_pest_cotrol_result[[length(stability_pest_cotrol_result) + 1]] <- half_life_proportion*100
+    }
+    # results_pest_control_df <- rbind(results_pest_control_df, setNames(data.frame(t(unlist(stability_pest_cotrol_result)), stringsAsFactors = FALSE), c("metrics", "total_avg", "total_half", "forest_avg", "forest_half", "edge_avg", "edge_half", "agriculture_avg", "agriculture_half")), stringsAsFactors = FALSE)
+    results_pest_control_df <- rbind(results_pest_control_df, setNames(data.frame(t(unlist(stability_pest_cotrol_result)), stringsAsFactors = FALSE), c("metrics", "forest_avg", "forest_half", "edge_avg", "edge_half", "agriculture_avg", "agriculture_half")), stringsAsFactors = FALSE)
+  }
+
+  pest_control_name <- ifelse(is_all, {is_all <<- FALSE; "stability_potential_pest_control"}, "stability_confirmed_pest_control")
+  write.csv(results_pest_control_df, file = paste0(pest_control_name, ".csv"), row.names = FALSE)
+
+  forest_canopy_row <- results_pest_control_df %>%
+    filter(metrics == "forest_canopy")
+
+  # 将相应的数据更新到 basic_network_analysis 数据框中
+  basic_network_analysis <- basic_network_analysis %>%
+    mutate(
+      auc = case_when(
+        network_name == "Forest Interior" ~ forest_canopy_row$forest_avg,
+        network_name == "Forest Edge" ~ forest_canopy_row$edge_avg,
+        network_name == "Agriculture" ~ forest_canopy_row$agriculture_avg
+      ),
+      half_life = case_when(
+        network_name == "Forest Interior" ~ forest_canopy_row$forest_half,
+        network_name == "Forest Edge" ~ forest_canopy_row$edge_half,
+        network_name == "Agriculture" ~ forest_canopy_row$agriculture_half
+      )
+    )
+  
+  
+  results_pest_control_long <- results_pest_control_df %>%
+    pivot_longer(cols = -metrics, names_to = "variable", values_to = "value") %>%
+    mutate(value = as.numeric(value))
+
+  for (metric in unique(results_pest_control_df$metrics)) {
+    p <- plot_auc_half_life(results_pest_control_long, metric)
+    ggsave(paste0("plot_", metric, ".png"), plot = p, width = 8, height = 6)
+  }
+  
+  plot_network_metric(basic_network_analysis)
+  plot_species_metric(species_result)
   
 }
 
@@ -1123,27 +1257,193 @@ ggsave(paste0("bird_static_", name, "_", time_stamp, ".jpg"), p)
 ##############################################################################################################################
 
 
+# input targeted list of analysis and web
+venn_calculate <- function(sequence, bird_insect_web) {
+  pest_species <- insect_role_all$Species[insect_role_all$Role == "Pest"]
+  pests_in_df <- intersect(rownames(bird_insect_web), pest_species)
+  num_all_insect <- length(pests_in_df)
+  # Filter the bird_insect_web based on the sequence provided
+  filtered_data <- bird_insect_web[, sequence, drop = FALSE]
+  filtered_data <- filtered_data[apply(filtered_data, 1, function(row) any(row != 0)), ]
+  
+  # Number of birds (columns) and insects (rows)
+  num_birds <- ncol(filtered_data)
+  num_insects <- nrow(filtered_data)
+  
+  # Identify pests in the filtered data
+  pest_species <- insect_role_all$Species[insect_role_all$Role == "Pest"]
+  pests_in_df <- intersect(rownames(filtered_data), pest_species)
+  num_pests <- length(pests_in_df)
+  
+  # Count non-forest birds
+  non_forest_bird_columns <- colnames(filtered_data) %in% bird_forest_coverage$BirdLife.Name.CORRECT[bird_forest_coverage$Bird.Type == "Non-Forest bird"]
+  num_non_forest_birds <- sum(non_forest_bird_columns)
+  
+  # Proportion of pests
+  pest_proportion <- num_pests / num_insects
+  
+  # Print the results
+  cat("Pest:", num_pests, "Non-pest:", num_insects - num_pests, "Proportion:",  num_pests / num_all_insect,"Proportion:",  num_insects / num_all_insect, "\n")
+  cat("Insect", num_insects, "Bird:", num_birds ,"\n")
+  cat("Forest Bird:", num_birds - num_non_forest_birds, "Non-forest Bird:", num_non_forest_birds ,"\n")
+  cat("\n")
+}
+
+
+# Initialize an empty list to store the processed networks
+data_venn <- list()
+for(name in names(data_in_site_type)){
+  print(name)
+  data_merged <- data_in_site_type[[name]]
+  
+  # Filter valid columns based on bird names in bird_forest_coverage
+  valid_columns <- bird_forest_coverage$BirdLife.Name.CORRECT %in% colnames(data_merged)
+  data_merged_reordered <- data_merged[, bird_forest_coverage$BirdLife.Name.CORRECT[valid_columns]]
+  
+  # Add insect species as a column and convert to row names
+  data_merged_reordered <- cbind(Insect_species=data_merged[["Insect_species"]], data_merged_reordered)
+  bird_insect_web <- data_merged_reordered %>% column_to_rownames(var = 'Insect_species')
+  
+  # Convert to binary (presence/absence) matrix
+  bird_insect_web[bird_insect_web != 0] <- 1
+  
+  # Remove rows that are entirely zero
+  bird_insect_web <- bird_insect_web[rowSums(bird_insect_web != 0) > 0, ]
+  
+  # Remove columns that are entirely zero
+  bird_insect_web <- bird_insect_web[, colSums(bird_insect_web != 0) > 0]
+  
+  # Save the processed network into the data_venn list
+  data_venn[[name]] <- bird_insect_web
+  
+  insect_species_in_web <- rownames(bird_insect_web)
+  
+  # Extract pest species from insect_role dataframe
+  pest_species <- insect_role$Species[insect_role$Role == "Pest"]
+  
+  # Determine which of the insect species in the bird_insect_web are pests
+  pests_in_web <- intersect(insect_species_in_web, pest_species)
+  
+  # Calculate the number of pests and non-pests
+  num_pests <- length(pests_in_web)
+  num_non_pests <- length(insect_species_in_web) - num_pests
+  
+  # Output the results
+  cat("Number of pests:", num_pests, "\n")
+  cat("Number of non-pests:", num_non_pests, "\n")
+}
+
+
+# Assuming data_venn contains the three data frames named "A", "B", "C"
+A <- colnames(data_venn[["Forest Interior"]])
+B <- colnames(data_venn[["Forest Edge"]])
+C <- colnames(data_venn[["Agriculture"]])
+
+# Calculate the set operations
+A_only <- setdiff(A, union(B, C))
+B_only <- setdiff(B, union(A, C))
+C_only <- setdiff(C, union(A, B))
+
+A_and_B <- intersect(A, B)
+A_and_C <- intersect(A, C)
+B_and_C <- intersect(B, C)
+
+A_B_C <- Reduce(intersect, list(A, B, C))
+
+for(name in names(data_venn)) {
+  cat("Processing web:", name, "\n")
+  web <- data_venn[[name]]
+  venn_calculate(A_B_C, web)
+}
+
+venn_calculate(A_only, data_venn[["Forest Interior"]])
+union(B_only, setdiff(A_and_B, A_B_C))
+venn_calculate(, data_venn[["Forest Interior"]])
+
+# start simulate the forest degrate
+venn_calculate(A, data_venn[["Forest Interior"]])
+venn_calculate(setdiff(A_and_B, A_B_C), data_venn[["Forest Interior"]])
+venn_calculate(setdiff(A_and_C, A_B_C), data_venn[["Forest Interior"]])
+venn_calculate(A_B_C, data_venn[["Forest Interior"]])
+venn_calculate(A_only, data_venn[["Forest Interior"]])
+
+
+venn_calculate(B, data_venn[["Forest Edge"]])
+venn_calculate(setdiff(A_and_B, A_B_C), data_venn[["Forest Edge"]])
+# venn_calculate(setdiff(A_and_C, A_B_C), data_venn[["Forest Edge"]])
+venn_calculate(A_B_C, data_venn[["Forest Edge"]])
+
+venn_calculate(setdiff(B_and_C, A_B_C), data_venn[["Forest Edge"]])
+venn_calculate(setdiff(B_only, A_B_C), data_venn[["Forest Edge"]])
+
+venn_calculate(C, data_venn[["Agriculture"]])
+venn_calculate(A_B_C, data_venn[["Agriculture"]])
+venn_calculate(setdiff(B_and_C, A_B_C), data_venn[["Agriculture"]])
+
+venn_calculate(setdiff(A_and_C, A_B_C), data_venn[["Agriculture"]])
+venn_calculate(C_only, data_venn[["Agriculture"]])
+
+# start simulate the forest degrate
+venn_calculate(A, data_venn[["Forest Interior"]]) # a forest
+venn_calculate(A_and_B, data_venn[["Forest Edge"]])# a b edge
+venn_calculate(setdiff(B, A_and_B), data_venn[["Forest Edge"]])# b only b and c - abc edge
+venn_calculate(B, data_venn[["Forest Edge"]])# b  edge
+venn_calculate(B_and_C, data_venn[["Agriculture"]])# b c agriculture
+venn_calculate(setdiff(C, B_and_C), data_venn[["Agriculture"]])# c only a and c - abc agriculture
+venn_calculate(C, data_venn[["Agriculture"]])# c agriculture
+
+# start simulate the forest degrate 2#
+venn_calculate(A, data_venn[["Forest Interior"]]) # a forest
+venn_calculate(A_and_B, data_venn[["Forest Edge"]])# a b edge
+venn_calculate(A_B_C, data_venn[["Agriculture"]]) # a forest
+venn_calculate(setdiff(C, A_B_C), data_venn[["Agriculture"]]) # a forest
+venn_calculate(C, data_venn[["Agriculture"]])# c agriculture
+
+# start simulate the forest degrate 2#
+venn_calculate(A, data_venn[["Forest Interior"]]) # a forest
+venn_calculate(A_and_C, data_venn[["Agriculture"]])# a b edge
+venn_calculate(setdiff(C, A_and_B), data_venn[["Agriculture"]]) # a forest
+venn_calculate(C, data_venn[["Agriculture"]])# c agriculture
+
+venn_calculate(A_and_C, data_venn[["Agriculture"]])# a b edge
+venn_calculate(A_and_C, data_venn[["Forest Interior"]])# a b edge
+
+combined_union <- union(agri_edge_minus_common, agri_fore_minus_common)
+combined_union <- union(combined_union, common_birds_3_intersect)
+agri_only <- setdiff(bird_3_union$`Agriculture`, agri_fore_minus_common)
 
 
 
+venn_calculate(A_B_C, data_venn[["Forest Interior"]])
+venn_calculate(A_B_C, data_venn[["Forest Edge"]])
+venn_calculate(A_B_C, data_venn[["Agriculture"]])
+
+venn_calculate(A_only, data_venn[["Forest Interior"]])
+venn_calculate(B_only, data_venn[["Forest Edge"]])
+venn_calculate(C_only, data_venn[["Agriculture"]])
+
+venn_calculate(setdiff(A_and_B, A_B_C), data_venn[["Forest Interior"]])
+venn_calculate(setdiff(A_and_C, A_B_C), data_venn[["Forest Interior"]])
+
+venn_calculate(setdiff(A_and_B, A_B_C), data_venn[["Forest Edge"]])
+venn_calculate(setdiff(B_and_C, A_B_C), data_venn[["Forest Edge"]])
+
+venn_calculate(setdiff(B_and_C, A_B_C), data_venn[["Agriculture"]])
+venn_calculate(setdiff(A_and_C, A_B_C), data_venn[["Agriculture"]])
+
+
+venn_calculate(A_and_B, data_venn[["Forest Interior"]])
+venn_calculate(A_and_C, data_venn[["Forest Interior"]])
+
+venn_calculate(A_and_B, data_venn[["Forest Edge"]])
+venn_calculate(B_and_C, data_venn[["Forest Edge"]])
+
+venn_calculate(B_and_C, data_venn[["Agriculture"]])
+venn_calculate(A_and_C, data_venn[["Agriculture"]])
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+venn_calculate(union(setdiff(B_and_C, A_B_C), C_only), data_venn[["Agriculture"]])
+venn_calculate(union(B_and_C, C_only), data_venn[["Agriculture"]])
 
 
